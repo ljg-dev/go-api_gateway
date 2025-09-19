@@ -6,7 +6,7 @@ MODULES := pkg gateway ratelimitd
 MODULE_PACKAGES := $(addsuffix /...,$(addprefix ./,$(MODULES)))
 
 # Phony
-.PHONY: all tidy test build docker up down fmt lint
+.PHONY: all tidy test build cover docker up down fmt lint
 
 all: tidy test build
 
@@ -28,6 +28,11 @@ test:
 
 build:
 	GOFLAGS=-trimpath CGO_ENABLED=0 go build $(MODULE_PACKAGES)
+
+cover:
+	@mkdir -p coverage
+	go test -covermode=atomic -coverprofile=coverage/coverage.out $(MODULE_PACKAGES)
+	go tool cover -func=coverage/coverage.out
 
 docker:
 	docker build -f Dockerfile.gateway   -t $(REGISTRY)/gateway:$(VERSION) .
