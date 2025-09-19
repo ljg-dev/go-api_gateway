@@ -15,6 +15,12 @@ jobs:
       contents: read
 
     steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
       - name: Evaluate PR
         id: eval
         env:
@@ -100,19 +106,8 @@ jobs:
           fi
 
           # 3) Validate all commit messages in the PR follow Conventional Commits
-          # Fetch commit messages via GitHub API
-          COMMITS_JSON="$(curl -sSf \
-            -H "Authorization: Bearer $GITHUB_TOKEN" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER/commits?per_page=250")"
-
-          if command -v jq >/dev/null 2>&1; then
-            :
-          else
-            echo "jq not found; installing..."
-            sudo apt-get update -y >/dev/null
-            sudo apt-get install -y jq >/dev/null
-          fi
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
 
           INVALID_COUNT=0
           SUMMARY_TMP="$(mktemp)"
@@ -122,8 +117,6 @@ jobs:
           echo "| Commit | Status |" >> "$SUMMARY_TMP"
           echo "|---|---|" >> "$SUMMARY_TMP"
 
-          # Iterate each commit message
-          echo "$COMMITS_JSON" | jq -r '.[] | [.sha[0:7], (.commit.message|split("\n")[0])] | @tsv' | \
           while IFS=$'\t' read -r SHA MSG; do
             if echo "$MSG" | grep -Eq "$COMMIT_SUBJECT_REGEX"; then
               echo "| \`$SHA\` $MSG | ✅ valid |" >> "$SUMMARY_TMP"
@@ -132,9 +125,9 @@ jobs:
               echo "| \`$SHA\` $MSG | ❌ **invalid** |" >> "$SUMMARY_TMP"
               INVALID_COUNT=$((INVALID_COUNT+1))
             fi
-          done
+          done < <(git log --pretty=format:'%h%x09%s' "$BASE_SHA".."$HEAD_SHA")
 
-          if [ "${INVALID_COUNT:-0}" -gt 0 ]; then
+          if [ "$INVALID_COUNT" -gt 0 ]; then
             {
               echo ""
               echo "**$INVALID_COUNT commit(s) do not follow Conventional Commits.**"
