@@ -1,0 +1,29 @@
+# -------- Builder -------- #
+FROM golang:1.25.1@sha256:8305f5fa8ea63c7b5bc85bd223ccc62941f852318ebfbd22f53bbd0b358c07e1 AS build
+
+ENV CGO_ENABLED=0 GOOS=linux
+WORKDIR /src
+
+COPY ratelimitd/go.mod ratelimitd/go.sum ratelimitd/
+COPY go.work go.work
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download -mod=readonly
+
+COPY ratelimitd/ ratelimitd/
+COPY pkg/ pkg/
+
+ARG TARGETARCH=amd64
+ENV GOWORK=off
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    GOARCH=$TARGETARCH \
+    go build -mod=readonly -trimpath -ldflags="-s -w" \
+      -o /out/ratelimitd ./cmd/server
+
+# -------- Runtime -------- #
+FROM gcr.io/distroless/static:nonroot@sha256:e8a4044e0b4ae4257efa45fc026c0bc30ad320d43bd4c1a7d5271bd241e386d0
+
+USER nonroot:nonroot
+COPY --from=build /out/ratelimitd /ratelimitd
+EXPOSE 8080 9090
+ENTRYPOINT ["/ratelimitd"]

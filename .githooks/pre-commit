@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Read only staged changes (unified, no context)
+added() { git diff --cached --diff-filter=AM -U0; }
+
+fail=0
+
+# ---- Secrets scanning (portable) --------------------------------------------
+
+# Private keys (add -- before the PATTERN so grep doesn't treat leading '-' as option)
+if added | grep -En -- '-----BEGIN (RSA|EC|DSA|OPENSSH|PRIVATE) KEY-----' >/dev/null; then
+  echo "❌ Possible private key detected in staged changes."
+  fail=1
+fi
+
+# AWS Access Key IDs
+if added | grep -En -- 'AKIA[0-9A-Z]{16}' >/dev/null; then
+  echo "❌ Possible AWS Access Key ID detected."
+  fail=1
+fi
+
+# GitHub tokens (classic/PAT/GHES variants)
+if added | grep -En -- 'gh[pousr]_[A-Za-z0-9]{36,255}' >/dev/null; then
+  echo "❌ Possible GitHub token detected."
+  fail=1
+fi
+
+# Slack tokens
+if added | grep -En -- 'xox[baprs]-[A-Za-z0-9-]+' >/dev/null; then
+  echo "❌ Possible Slack token detected."
+  fail=1
+fi
+
+# Google API keys
+if added | grep -En -- 'AIza[0-9A-Za-z\-_]{35}' >/dev/null; then
+  echo "❌ Possible Google API key detected."
+  fail=1
+fi
+
+# Generic password= (use -i instead of (?i) inline flag; avoid \s for BusyBox)
+# "password"   : or =   "non-space, quoted, len>=6"
+if added | grep -Eni -- '(password|passwd|pwd)[[:space:]]*[:=][[:space:]]*["'\''][^"'\''[:space:]]{6,}["'\'']' >/dev/null; then
+  echo "❌ Possible hardcoded password detected."
+  fail=1
+fi
+
+# Large files (working tree size; adjust 1024KB as needed)
+max_kb=1024
+# Handle spaces/newlines in filenames using NUL delimiters
+while IFS= read -r -d '' path; do
+  if [ -f "$path" ]; then
+    size_kb=$(du -k -- "$path" 2>/dev/null | awk '{print $1}')
+    if [ -n "${size_kb:-}" ] && [ "$size_kb" -gt "$max_kb" ]; then
+      echo "❌ Staged file too large: $path (${size_kb}KB > ${max_kb}KB)"
+      fail=1
+    fi
+  fi
+done < <(git diff --cached --name-only --diff-filter=AM -z)
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "If these are false positives, remove the secret/large file from the change or add an allowlist."
+  exit 1
+fi
+
+# ---- Conventional branch name (robust) --------------------------------------
+
+branch_regex='^(feat|feature|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(/[a-z0-9._-]+){1,}$'
+
+# Get branch name safely, even on unborn branch; empty if detached
+branch="$(git symbolic-ref --quiet --short HEAD || true)"
+
+if [ -n "$branch" ]; then
+  if ! printf '%s' "$branch" | grep -Eq -- "$branch_regex"; then
+    echo "❌ Invalid branch name: '$branch'"
+    echo "Expected: $branch_regex"
+    echo "Learn more: https://www.conventionalcommits.org/en/v1.0.0/"
+    exit 1
+  fi
+else
+  # Detached HEAD or other state — skip branch name check
+  echo "ℹ️  Skipping branch-name check (detached HEAD or no branch)."
+fi
+
+exit 0

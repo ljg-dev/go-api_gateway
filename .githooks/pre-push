@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Args from git: <remote_name> <remote_url>
+remote="${1:-origin}"
+
+branch="$(git rev-parse --abbrev-ref HEAD || echo HEAD)"
+protected_regex='^(main|dev)$'
+conventional_branch_regex='^(feat|feature|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(/[a-z0-9._-]+){1,}$'
+learn_url="https://www.conventionalcommits.org/en/v1.0.0/"
+
+# 1) Block direct pushes to protected branches
+if [[ "$branch" =~ $protected_regex ]]; then
+  echo "❌ Direct pushes to '$branch' are blocked. Open a PR from a feature branch."
+  exit 1
+fi
+
+# 2) Enforce conventional branch name before push
+if [[ "$branch" != "HEAD" ]] && ! [[ "$branch" =~ $conventional_branch_regex ]]; then
+  echo "❌ Invalid branch name: '$branch'"
+  echo "Expected: $conventional_branch_regex"
+  echo "Learn more: $learn_url"
+  exit 1
+fi
+
+# 3) Ensure Go 1.25.1 (exact) — fail fast if wrong version
+if ! command -v go >/dev/null 2>&1; then
+  echo "❌ 'go' not found. Install Go 1.25.1."
+  exit 1
+fi
+goversion="$(go version 2>/dev/null | awk '{print $3}')"
+if [[ "$goversion" != "go1.25.1" ]]; then
+  echo "❌ Go version mismatch. Required: go1.25.1, found: $goversion"
+  echo "Tip: add 'toolchain go1.25.1' to go.mod and use GOTOOLCHAIN=auto"
+  exit 1
+fi
+
+# 4) Run quality gates
+echo "🔎 Running make lint/test/build/cover with $goversion ..."
+make lint
+make test
+make build
+make cover
+
+echo "✅ Pre-push checks passed for branch '$branch' → $remote"

@@ -1,0 +1,65 @@
+name: go-gates
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main, dev]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: go-gates-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Go 1.25.1 • lint / test / build / cover
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go 1.25.1
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.1'
+          check-latest: true
+
+      - name: Verify Go version
+        run: |
+          set -e
+          v="$(go version | awk '{print $3}')"
+          echo "found ${v}"
+          test "${v}" = "go1.25.1"
+
+      - name: Cache Go build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: ${{ runner.os }}-go-
+
+      - name: Install golangci-lint (if missing)
+        run: |
+          if ! command -v golangci-lint >/dev/null 2>&1; then
+            curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+              | sh -s -- -b "$HOME/bin" v1.61.0
+            echo "$HOME/bin" >> "$GITHUB_PATH"
+          fi
+
+      - name: make lint
+        run: make lint
+
+      - name: make test
+        run: make test
+
+      - name: make build
+        run: make build
+
+      - name: make cover
+        run: make cover

@@ -1,0 +1,157 @@
+name: branch-source-guard
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main, dev]
+
+jobs:
+  guard:
+    name: Enforce PR source, author, branch, and commit rules
+    runs-on: ubuntu-latest
+
+    permissions:
+      pull-requests: read
+      contents: read
+
+    steps:
+      - name: Evaluate PR
+        id: eval
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          BASE="${{ github.event.pull_request.base.ref }}"
+          HEAD="${{ github.event.pull_request.head.ref }}"
+          AUTHOR="${{ github.event.pull_request.user.login }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+
+          echo "Base: $BASE"
+          echo "Head: $HEAD"
+          echo "Author: $AUTHOR"
+
+          # ---- Policy ----
+
+          # Learn-more link to show in errors
+          LEARN_URL="https://www.conventionalcommits.org/en/v1.0.0/"
+
+          # Allowed conventional branch name pattern for PRs targeting 'dev'
+          # Examples:
+          #   feat/cool-thing
+          #   fix/api-timeout
+          #   docs/readme-typos
+          #   refactor/db-layer
+          #   ci/release-pipeline
+          CONVENTIONAL_BRANCH_REGEX='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(/[a-z0-9._-]+){1,}$'
+
+          # Conventional Commits subject line pattern (first line only)
+          # Examples:
+          #   feat(parser): add ability to parse arrays
+          #   fix!: drop support for Node 12
+          #   docs: update README
+          COMMIT_SUBJECT_REGEX='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([A-Za-z0-9._/-]+\))?(!)?: .+'
+
+          # Who is authorized to open mergeable PRs
+          AUTHORIZED_USERS=(
+            "ljg-dev"
+          )
+
+          # 1) Author must be authorized
+          AUTH_OK="no"
+          for u in "${AUTHORIZED_USERS[@]}"; do
+            if [ "$AUTHOR" = "$u" ]; then AUTH_OK="yes"; break; fi
+          done
+          if [ "$AUTH_OK" != "yes" ]; then
+            echo "::error title=Unauthorized PR author::@$AUTHOR is not allowed to open mergeable PRs."
+            exit 1
+          fi
+
+          # 2) Source branch rules by target
+          if [ "$BASE" = "main" ]; then
+            # main only accepts PRs coming from dev
+            if [ "$HEAD" != "dev" ]; then
+              echo "::error title=Wrong source branch::Merges into 'main' must come *only* from 'dev'. Current head: '$HEAD'."
+              exit 1
+            fi
+          elif [ "$BASE" = "dev" ]; then
+            # dev only accepts PRs from conventional branch names
+            if ! echo "$HEAD" | grep -Eq "$CONVENTIONAL_BRANCH_REGEX"; then
+              echo "::error title=Invalid branch name::Merges into 'dev' require conventional branch names like 'feat/...', 'fix/...', 'docs/...'. Current head: '$HEAD'. Learn more: $LEARN_URL"
+              {
+                echo "## ❌ Invalid branch name"
+                echo ""
+                echo "**Branch:** \`$HEAD\`"
+                echo ""
+                echo "Your branch must match:"
+                echo "\`\`\`regex"
+                echo "$CONVENTIONAL_BRANCH_REGEX"
+                echo "\`\`\`"
+                echo ""
+                echo "**Learn more:** $LEARN_URL"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          else
+            # For any other protected target branches (if added later), block by default
+            echo "::error title=Blocked target branch::Branch '$BASE' is not configured for merges."
+            exit 1
+          fi
+
+          # 3) Validate all commit messages in the PR follow Conventional Commits
+          # Fetch commit messages via GitHub API
+          COMMITS_JSON="$(curl -sSf \
+            -H "Authorization: Bearer $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/pulls/$PR_NUMBER/commits?per_page=250")"
+
+          if command -v jq >/dev/null 2>&1; then
+            :
+          else
+            echo "jq not found; installing..."
+            sudo apt-get update -y >/dev/null
+            sudo apt-get install -y jq >/dev/null
+          fi
+
+          INVALID_COUNT=0
+          SUMMARY_TMP="$(mktemp)"
+
+          echo "## Conventional Commits validation" >> "$SUMMARY_TMP"
+          echo "" >> "$SUMMARY_TMP"
+          echo "| Commit | Status |" >> "$SUMMARY_TMP"
+          echo "|---|---|" >> "$SUMMARY_TMP"
+
+          # Iterate each commit message
+          echo "$COMMITS_JSON" | jq -r '.[] | [.sha[0:7], (.commit.message|split("\n")[0])] | @tsv' | \
+          while IFS=$'\t' read -r SHA MSG; do
+            if echo "$MSG" | grep -Eq "$COMMIT_SUBJECT_REGEX"; then
+              echo "| \`$SHA\` $MSG | ✅ valid |" >> "$SUMMARY_TMP"
+            else
+              echo "::error title=Invalid commit message::$MSG"
+              echo "| \`$SHA\` $MSG | ❌ **invalid** |" >> "$SUMMARY_TMP"
+              INVALID_COUNT=$((INVALID_COUNT+1))
+            fi
+          done
+
+          if [ "${INVALID_COUNT:-0}" -gt 0 ]; then
+            {
+              echo ""
+              echo "**$INVALID_COUNT commit(s) do not follow Conventional Commits.**"
+              echo ""
+              echo "**Required subject pattern:**"
+              echo "\`\`\`regex"
+              echo "$COMMIT_SUBJECT_REGEX"
+              echo "\`\`\`"
+              echo ""
+              echo "**Learn more:** $LEARN_URL"
+            } >> "$SUMMARY_TMP"
+            cat "$SUMMARY_TMP" >> "$GITHUB_STEP_SUMMARY"
+            rm -f "$SUMMARY_TMP"
+            exit 1
+          fi
+
+          cat "$SUMMARY_TMP" >> "$GITHUB_STEP_SUMMARY"
+          rm -f "$SUMMARY_TMP"
+
+          echo "All checks passed."

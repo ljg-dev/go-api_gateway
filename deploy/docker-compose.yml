@@ -1,0 +1,26 @@
+services:
+  redis:
+    image: redis:7
+    ports: ["6379:6379"]
+
+  ratelimitd:
+    build:
+      context: .
+      dockerfile: Dockerfile.ratelimitd
+    environment:
+      - REDIS_ADDR=redis:6379
+      - FAIL_POLICY=fail-open
+    depends_on: [redis]
+    ports: ["9091:9091"]   # metrics
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.gateway
+    environment:
+      - RATELIMIT_URL=http://ratelimitd:8080
+      - METRICS_ADDR=:9090
+    depends_on: [ratelimitd]
+    ports:
+      - "8080:8080"
+      - "9090:9090"

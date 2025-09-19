@@ -1,0 +1,46 @@
+# === Go build artifacts ===
+/bin/
+/out/
+/dist/
+/build/
+/coverage/
+/vendor/
+/*.exe
+/*.dll
+/*.so
+/*.dylib
+/*.test
+
+# Go profiles & caches
+*.out
+*.prof
+*.cover
+*.cov
+*.pprof
+__debug*
+
+# === Logs & temp ===
+*.log
+*.tmp
+*.bak
+*.old
+*.orig
+
+# === Editor/OS junk ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.DS_Store
+Thumbs.db
+
+# === Env & secrets (NEVER commit) ===
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.keystore
